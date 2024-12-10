@@ -110,8 +110,8 @@ def save_to_database(receipt_data):
     try:
         conn = mysql.connector.connect(
             host="localhost",
-            user="root",
-            password="",
+            user="admin",
+            password="123",
             database="cskdb"
         )
         cursor = conn.cursor()
