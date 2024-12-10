@@ -13,7 +13,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 
 # Set up Tesseract path (for Windows)
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+pytesseract.pytesseract.tesseract_cmd = '/bin/tesseract'
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -157,8 +157,8 @@ def process_receipt(image_path, vectorizer, X, categories, converted_folder):
 
 # Main Function
 def main():
-    folder_path = 'C:/Users/CEO Ivo John Barroba/Downloads/dataset/scanned'
-    converted_folder = 'C:/Users/CEO Ivo John Barroba/Downloads/dataset/converted'
+    folder_path = '/home/ocr/Downloads/scanned'
+    converted_folder = '/home/ocr/Downloads/converted'
     vectorizer, X, categories = train_ml_model(TRAINING_DATA)
 
     with ThreadPoolExecutor() as executor:
