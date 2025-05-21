@@ -1,148 +1,229 @@
-import os
-import re
 import cv2
 import pytesseract
-import mysql.connector
-import pandas as pd
-import nltk
 from PIL import Image
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
+import os
+import re
+from fuzzywuzzy import fuzz
+import mysql.connector
+import logging
+from datetime import datetime
 
-# Set up Tesseract path (for Windows)
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+# Logging config
+logging.basicConfig(level=logging.INFO)
 
-# Rule-Based Categories
-RULE_BASED_CATEGORIES = {
-    "Food & Groceries": ["grocery", "supermarket", "food", "restaurant", "dining", "cafe", "pizza", "bakery",
-                         "smsupermarket", "starbucks", "starbucks coffee", "dali", "dali everyday grocery", "7/11", "robinsons supermarket", "puremart", "easy day shop", "s&r", "s & r",
-                         "emilu's mart", "puregold", "super8", "super 8"],
-    "Utilities": ["electric", "water", "gas", "utility", "internet", "phone", "cable", "petron", "shell", "caltex", "meralco", "maynilad", "pldt",
-                  "pldthome", "pldthomefibr", "smart", "globe", "mr diy"],
-    "Transportation": ["taxi", "uber", "train", "bus", "flight", "airlines", "car rental", "fuel", "gas station",
-                       "grab", "taxi receipt", "angkas", "moveit", "move it", "lrt", "mrt"],
-    "Entertainment": ["movie", "concert", "theater", "game", "entertainment", "music"],
-    "Healthcare": ["pharmacy", "hospital", "clinic", "dentist", "optician", "medical", "mercury drug", "mercury drugs"],
-    "Clothes": ["uni qlo", "uniqlo", "bench", "penshoppe", "smstore", "medical"],
-    "Miscellaneous": []
+# Corrections
+custom_corrections = {
+    "Tofal": "Total",
+    "Fotal": "Total",
+    "Toral": "Total",
+    "Tetai": "Total",
+    "casi": "Cash",
+    "Chinge": "Change",
+    "Chane": "Change",
+    "Receipl": "Receipt",
+    "Rectipt": "Receipt",
+    "INVOICEE": "INVOICE",
+    "NV": "INV",
+    "TIIN": "TIN",
+    "SABES": "SALES",
+    "Elever": "Eleven",
+    "Purpie": "Purple",
+    "Chine": "Chinese",
+    "Altamart": "Alfamart"
+
 }
 
-# Training Dataset for ML-Based Categorization
-TRAINING_DATA = [
-    {"text": "Gas at Shell Station", "category": "Transportation"},
-    {"text": "Dinner at McDonald's", "category": "Food & Groceries"},
-    {"text": "Electricity Bill", "category": "Utilities"},
-    {"text": "Concert Ticket", "category": "Entertainment"},
-    {"text": "Pharmacy Purchase", "category": "Healthcare"},
+known_stores = [
+    "UNIQLO", "SM SUPERMARKET", "WATSONS", "7-ELEVEN", "JOLLIBEE",
+    "MCDONALD'S", "STARBUCKS", "ROBINSONS", "MINISO", "NATIONAL BOOKSTORE",
+    "SMSTORE", "SM STORE", "KENNY ROGERS ROASTERS", "EMILU'S MART", "Puregold", "JR ECONOVATION PEST CONTROL SERVICES",
+    "Purple Chinese", "Alfamart", "ALFAMART, AMI BUHO", "Puregold Price Club, Inc."
 ]
 
-# Preprocessing for ML-Based Categorization
-def preprocess_text(text):
-    text = text.lower()
-    text = re.sub(r'[^\w\s]', '', text)
-    tokens = nltk.word_tokenize(text)
-    return ' '.join(tokens)
+category_keywords = {
+    "Meals": ["KENNY ROGERS ROASTERS", "Starbucks", "Jollibee", "Mcdonald"],
+    "medicine": ["WATSONS", "paracetamol", "drug", "capsule", "syrup", "Mercury Drugs"],
+    "Convenience": ["candy", "soda", "Alfamart", "7-eleven", "snack"],
+    "Grocery": ["Puregold", "SM SUPERMARKET", "ROBINSONS", "EMILU'S MART", "Puregold Price Club, Inc."],
+}
 
-# Train ML-Based Model
-def train_ml_model(data):
-    df = pd.DataFrame(data)
-    vectorizer = TfidfVectorizer(preprocessor=preprocess_text)
-    X = vectorizer.fit_transform(df['text'])
-    return vectorizer, X, df['category']
+def clean_ocr_text(text):
+    return re.sub(r'[^\x00-\x7F]+', '', text).strip()
 
-# ML-Based Categorization
-def ml_categorize(text, vectorizer, X, categories):
-    processed_text = preprocess_text(text)
-    input_vector = vectorizer.transform([processed_text])
-    similarity = cosine_similarity(input_vector, X)
-    best_match_index = similarity.argmax()
-    return categories.iloc[best_match_index]
+def apply_custom_corrections(text, corrections):
+    for wrong, right in corrections.items():
+        text = re.sub(rf'\b{wrong}\b', right, text, flags=re.IGNORECASE)
+    return text
 
-# Hybrid Categorization
-def categorize_receipt(vendor, description, vectorizer, X, categories):
-    if vendor.lower() in [v.lower() for v in RULE_BASED_CATEGORIES.keys()]:
-        return RULE_BASED_CATEGORIES[vendor]
+def filter_lines(text):
+    lines = text.splitlines()
+    return "\n".join([line for line in lines if line.strip()])
 
-    combined_text = f"{vendor} {description}".lower()
-    for category, keywords in RULE_BASED_CATEGORIES.items():
-        if any(keyword in combined_text for keyword in keywords):
-            return category
-
-    return ml_categorize(combined_text, vectorizer, X, categories)
-
-# Preprocess Image
-def preprocess_image(image_path):
-    image = cv2.imread(image_path)
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
-    return thresh
-
-# Perform OCR
-def perform_ocr(image):
-    return pytesseract.image_to_string(Image.fromarray(image))
-
-# Extract Details from Text
-def extract_details(ocr_text):
-    date = re.search(r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{2}[/-]\d{2})\b", ocr_text)
-    total = re.search(r"(?:Total|Amount Due|Grand Total|Total Due)[\s:]*[₱$€]?(\d+[.,]?\d{2})", ocr_text, re.IGNORECASE)
-    lines = ocr_text.split("\n")
-    vendor = "Unknown"
-
+def extract_vendor(text, known_stores):
+    best_match = None
+    best_score = 0
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
     for line in lines:
-        if len(line.strip()) > 3 and not any(keyword in line.lower() for keyword in ["total", "amount", "date"]):
-            vendor = line.strip()
+        for store in known_stores:
+            score = fuzz.partial_ratio(line.upper(), store.upper())
+            if score > best_score and score > 80:
+                best_score = score
+                best_match = store
+    return best_match
+
+def extract_structured_info(text):
+    data = {}
+    lines = text.splitlines()
+    first_lines = [line.strip() for line in lines[:10] if line.strip()]
+
+    # Fuzzy match for store name
+    best_match = None
+    best_score = 0
+    for line in first_lines:
+        for store in known_stores:
+            score = fuzz.ratio(line.upper(), store.upper())
+            if score > best_score and score > 75:
+                best_score = score
+                best_match = store
+    if best_match:
+        data['vendor'] = extract_vendor(text, known_stores)
+
+    # Date (convert to YYYY-MM-DD)
+    date_match = re.search(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})', text)
+    if date_match:
+        raw_date = date_match.group(1)
+        for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%m-%d-%Y", "%m/%d/%Y", "%d-%m-%y", "%d/%m/%y"):
+            try:
+                parsed_date = datetime.strptime(raw_date, fmt)
+                data['date'] = parsed_date.strftime("%Y-%m-%d")
+                break
+            except ValueError:
+                continue
+
+    # Total (try multiple patterns)
+    total_patterns = [
+        r'\bTOTAL\s*\(?\d+\)?[^\d]{0,10}(\d{1,4}(?:[.,]\d{2}))',
+        r'\bDINE[- ]IN TOTAL\b[^\d]{0,10}(\d{1,4}(?:[.,]\d{2}))',
+        r'\bTOTAL DUE\b[^\d]{0,10}(\d{1,4}(?:[.,]\d{2}))',
+        r'\bTOTAL\b[^\d]{0,10}(\d{1,4}(?:[.,]\d{2}))',
+        r'\bAMOUNT DUE\b[^\d]{0,10}(\d{1,4}(?:[.,]\d{2}))',
+    ]
+
+    for pattern in total_patterns:
+        total_match = re.search(pattern, text, re.IGNORECASE)
+        if total_match:
+            try:
+                amount = total_match.group(1).replace(',', '')
+                data['total'] = float(amount)
+                break
+            except ValueError:
+                continue
+
+    # Optional fallback: extract the largest amount (only if no total found)
+    if 'total' not in data:
+        amounts = re.findall(r'(\d{1,4}(?:[.,]\d{2}))', text)
+        try:
+            numbers = [float(a.replace(',', '')) for a in amounts]
+            if numbers:
+                data['total'] = max(numbers)
+        except:
+            pass
+
+    # Category guess from keywords
+    full_text = text.lower()
+    for category, keywords in category_keywords.items():
+        if any(kw in full_text for kw in keywords):
+            data['category'] = category
             break
+    else:
+        data['category'] = "Expense"
 
-    return {
-        "date": date.group(0) if date else "Unknown",
-        "vendor": vendor,
-        "total": total.group(1) if total else "0.00"
-    }
+    return data
 
-# Save to Database
 def save_to_database(receipt_data):
-    conn = mysql.connector.connect(
-        host="localhost",
-        user="root",
-        password="",
-        database="cskdb"
-    )
-    cursor = conn.cursor()
-    sql = '''
-        INSERT INTO receipts (date, vendor, total, category)
-        VALUES (%s, %s, %s, %s)
-    '''
-    values = (receipt_data["date"], receipt_data["vendor"], receipt_data["total"], receipt_data["category"])
-    cursor.execute(sql, values)
-    conn.commit()
-    print("Receipt saved to MySQL database.")
-    cursor.close()
-    conn.close()
+    try:
+        conn = mysql.connector.connect(
+            host="localhost",
+            user="admin",
+            password="123",
+            database="csk"
+        )
+        cursor = conn.cursor()
+        sql = '''
+            INSERT INTO scanned_receipts (receipt_date, vendor, amount, category, image_path)
+            VALUES (%s, %s, %s, %s, %s)
+        '''
+        values = (
+            receipt_data.get("date"),
+            receipt_data.get("vendor"),
+            receipt_data.get("total"),
+            receipt_data.get("category"),
+            receipt_data.get("image_path")
+        )
+        cursor.execute(sql, values)
+        conn.commit()
+        logging.info("✅ Receipt saved to MySQL.")
+    except mysql.connector.Error as err:
+        logging.error(f"❌ DB Error: {err}")
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
-# Process Receipt Image
-def process_receipt(image_path, vectorizer, X, categories):
-    processed_image = preprocess_image(image_path)
-    ocr_text = perform_ocr(processed_image)
-    print("OCR Text Output:\n", ocr_text)
 
-    receipt_data = extract_details(ocr_text)
-    print("Extracted Receipt Data:", receipt_data)
+# New: Save image to XAMPP uploads folder
+def save_receipt_image(image_path, filename):
+    destination_folder = r"F:\xampp\htdocs\csk\uploads\scanned"
+    if not os.path.exists(destination_folder):
+        os.makedirs(destination_folder)
 
-    receipt_data["category"] = categorize_receipt(receipt_data["vendor"], ocr_text, vectorizer, X, categories)
-    print("Categorized as:", receipt_data["category"])
+    destination_path = os.path.join(destination_folder, filename)
+    try:
+        # Copy the file to the destination
+        with open(image_path, 'rb') as src, open(destination_path, 'wb') as dst:
+            dst.write(src.read())
+        logging.info(f"🖼️ Image saved to: {destination_path}")
+    except Exception as e:
+        logging.error(f"❌ Error saving image: {e}")
 
-    save_to_database(receipt_data)
+    # Return relative path for DB
+    return f"../uploads/scanned/{filename}"
 
-# Main Function
-def main():
-    folder_path = 'C:/Users/CEO Ivo John Barroba/Downloads/dataset/receipts'
-    vectorizer, X, categories = train_ml_model(TRAINING_DATA)
 
+def ocr_with_tesseract(image_path):
+    image = cv2.imread(image_path)
+    if image is None:
+        print(f"[!] Could not load image: {image_path}")
+        return "", {}
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    denoised = cv2.medianBlur(gray, 3)
+    thresh = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+
+    raw_text = pytesseract.image_to_string(thresh)
+    cleaned = clean_ocr_text(raw_text)
+    corrected = apply_custom_corrections(cleaned, custom_corrections)
+    filtered = filter_lines(corrected)
+    extracted = extract_structured_info(filtered)
+    return filtered, extracted
+
+def scan_folder(folder_path):
+    supported_ext = ['.jpg', '.jpeg', '.png']
     for filename in os.listdir(folder_path):
-        if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+        if any(filename.lower().endswith(ext) for ext in supported_ext):
             image_path = os.path.join(folder_path, filename)
-            print(f"\nProcessing: {filename}")
-            process_receipt(image_path, vectorizer, X, categories)
+            print(f"\n🔍 Scanning: {filename}")
+            text, info = ocr_with_tesseract(image_path)
 
-if __name__ == "__main__":
-    main()
+            img_url = save_receipt_image(image_path, filename)
+            info['image_path'] = img_url
+            print("📄 OCR Result:\n", text)
+            print("\n📌 Extracted Info:\n", info)
+            save_to_database(info)
+            print("------------------------------------------------")
+
+# 📁 Folder path
+folder_path = r"C:\Users\CEO Ivo John Barroba\Downloads\dataset\scanned"
+scan_folder(folder_path)
