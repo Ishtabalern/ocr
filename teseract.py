@@ -124,7 +124,7 @@ def extract_structured_info(text):
     # Total (try multiple patterns)
     total_patterns = [
         # Priority 1 – Final totals (most accurate)
-        r'\b(?:NET\s*TOTAL|TOTAL DUE|AMOUNT DUE|GRAND TOTAL|DINE[- ]IN TOTAL|TOTAL AMOUNT|TOTAL)\b[^\d]{0,10}(?:PHP|Php|php|₱|P)?\s*(\d{1,6}(?:[.,]\d{1,2})?)',
+        r'\b(?:NET\s*TOTAL|TOTAL DUE|AMOUNT DUE|GRAND TOTAL|DINE[- ]IN TOTAL|TOTAL AMOUNT|TOTAL)\b[^\d]{0,20}?(?:\(\d+\))?[^\d]{0,10}?(?:PHP|Php|php|₱|P)?\s*(\d{1,6}(?:[.,]\d{1,2})?)',
         # Priority 2 – Cash paid
         r'\bCash Tendered\b[^\d]{0,10}(?:PHP|Php|php|₱|P)?\s*(\d{1,6}(?:[.,]\d{1,2})?)',
         # Priority 3 – Subtotals
