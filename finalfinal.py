@@ -39,7 +39,8 @@ custom_corrections = {
     "Subtota": "Subtotal",
     "SHAHARHA": "SHAWARMA",
     "TURK S": "TURK'S",
-    "SH": "SM", "FROPERTY": "PROPERTY", "SANAGENENT": "MANAGEMENT", "CORPORT": "CORPORATION"
+    "SH": "SM", "FROPERTY": "PROPERTY", "SANAGENENT": "MANAGEMENT", "CORPORT": "CORPORATION", "Q!Save": "O!SAVE", "sTotal": "Total",
+    "Philippine Seven Corporation": "7-Eleven"
 }
 
 known_stores = [
@@ -49,7 +50,7 @@ known_stores = [
     "Purple Chinese", "Alfamart", "ALFAMART, AMI BUHO", "Puregold Price Club, Inc.", "Cafe Mary Grace", "Ikano", "AYALA PROPERTY MANAGEMENT CORPORATION",
     "S&R PIZZA INC.", "KAMUNING BAKERY CORP", "Starbucks Coffee", "Chowking", "Turks Shawarma", "Erjohn & Almark Transit Corp", "Coco Fresh Tea & Juice",
     "Jollibee", "CHOWKING", "CHOWKING VERMOSA", "JOLLIBEE", "JOLLIBEE SM DASMARINAS", "ZUSPRESSO", "ACE Hardware", "Home It Yourself", "WATSONS", "NORTHERN STAR ENERGY",
-    "Goldilocks", "Gong Cha", "WASHOKU KIKUFUJI", "SAVEMORE", "S&R", "SHELL", "ELECTROWORLD", "PREMIER SOUTHERN PETROLEUM", "COFFEE PROJECT", "JETTI"
+    "Goldilocks", "Gong Cha", "WASHOKU KIKUFUJI", "SAVEMORE", "S&R", "SHELL", "ELECTROWORLD", "PREMIER SOUTHERN PETROLEUM", "COFFEE PROJECT", "JETTI", "O!SAVE", "O!SAVE Everyday Low Price"
 ]
 
 category_keywords = {
@@ -74,6 +75,7 @@ def filter_lines(text):
 
 def extract_vendor(text, known_stores, top_lines=10):
     lines = [line.strip() for line in text.splitlines() if line.strip()]
+    lines = lines[:top_lines]  # Only use top lines for vendor detection
 
     best_match = None
     best_score = 0
@@ -86,7 +88,7 @@ def extract_vendor(text, known_stores, top_lines=10):
                 best_match = store
                 matched_line = line
     logging.info(f"🛒 Vendor match: {best_match} (matched line: '{matched_line}', score: {best_score})")
-    return best_match
+    return best_match, best_score
 
 
 def extract_structured_info(text):
@@ -103,7 +105,9 @@ def extract_structured_info(text):
             if score > best_score and score > 75:
                 best_score = score
                 best_match = store
-    data['vendor'] = extract_vendor(text, known_stores)
+    vendor, score = extract_vendor(text, known_stores)
+    data['vendor'] = vendor
+    data['vendor_confidence'] = score
 
     # Date (convert to YYYY-MM-DD)
     date_match = re.search(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})', text)
